@@ -1,0 +1,12 @@
+[package]
+name = "interactive_background"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+image = "0.25.4"
+vulkano = "0.34.0"
+winit = "0.28.0"
+winapi = { version = "0.3.9", features = ["minwindef", "windef", "handleapi", "winnt", "processthreadsapi", "winuser", "ntdef"] }
+vulkano-shaders = "0.34.0"
+cgmath = "0.18.0"
