@@ -54,11 +54,15 @@ use vulkano::{
     Validated, VulkanError, VulkanLibrary,
 };
 use vulkano::instance::InstanceExtensions;
+use winapi::ctypes::c_int;
+use winapi::um::winuser::GetKeyState;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
+use winit::event::VirtualKeyCode;
+
 mod background_handle;
 mod model;
 mod shaders;
@@ -289,6 +293,14 @@ fn main() {
             }
             Event::RedrawEventsCleared => {
                 let image_extent: [u32; 2] = dimensions.into();
+
+                unsafe{
+                    if(GetKeyState(0x1B) <0){
+                        println!("exiting");
+                        background_handle::release_window(hwnd);
+                        *control_flow = ControlFlow::Exit;
+                    }
+                }
 
                 if image_extent.contains(&0) {
                     return;
