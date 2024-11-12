@@ -1,15 +1,9 @@
-// Copyright (c) 2016 The vulkano developers
-// Licensed under the Apache License, Version 2.0
-// <LICENSE-APACHE or
-// https://www.apache.org/licenses/LICENSE-2.0> or the MIT
-// license <LICENSE-MIT or https://opensource.org/licenses/MIT>,
-// at your option. All files in the project carrying such
-// notice may not be copied, modified, or distributed except
-// according to those terms.
-
 use cgmath::{Matrix3, Matrix4, Point3, Rad, Vector3};
 use model::{Normal, Position, INDICES, NORMALS, POSITIONS};
 use std::{sync::Arc, time::Instant};
+use vulkano::buffer::{BufferContents, Subbuffer};
+use vulkano::instance::InstanceExtensions;
+use vulkano::memory::allocator::MemoryAllocator;
 use vulkano::{
     buffer::{
         allocator::{SubbufferAllocator, SubbufferAllocatorCreateInfo},
@@ -53,17 +47,42 @@ use vulkano::{
     sync::{self, GpuFuture},
     Validated, VulkanError, VulkanLibrary,
 };
-use vulkano::instance::InstanceExtensions;
 use winit::{
     event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    event_loop::{ControlFlow, EventLoop}
+    ,
 };
 mod background_handle;
 mod model;
 mod shaders;
 
-fn main() {
+/// Shortcut for creating a buffer.
+#[inline]
+fn create_buffer<T: BufferContents, I: IntoIterator<Item = T>>(
+    alloc: Arc<dyn MemoryAllocator>,
+    usage: BufferUsage,
+    content: I,
+) -> Subbuffer<[T]>
+where
+    I::IntoIter: ExactSizeIterator,
+{
+    Buffer::from_iter(
+        alloc,
+        BufferCreateInfo {
+            usage,
+            ..Default::default()
+        },
+        AllocationCreateInfo {
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        },
+        content,
+    )
+    .unwrap()
+}
+
+fn main() -> Result<(), Validated<VulkanError>> {
     // The start of this example is exactly the same as `triangle`. You should read the `triangle`
     // example if you haven't done so yet.
 
@@ -71,11 +90,12 @@ fn main() {
 
     let library = VulkanLibrary::new().unwrap();
     let required_extensions = {
-        InstanceExtensions{
+        InstanceExtensions {
             khr_win32_surface: true,
             ..Surface::required_extensions(&event_loop)
         }
     };
+    
     let instance = Instance::new(
         library,
         InstanceCreateInfo {
@@ -83,20 +103,18 @@ fn main() {
             enabled_extensions: required_extensions,
             ..Default::default()
         },
-    )
-        .unwrap();
-
+    )?;
 
     let (hwnd, hinstance, dimensions) = background_handle::get_background_handle();
-    let surface = unsafe { Surface::from_win32(instance.clone(), hinstance, hwnd, None).unwrap() };
+    let surface = unsafe { Surface::from_win32(instance.clone(), hinstance, hwnd, None)? };
 
     let device_extensions = DeviceExtensions {
         khr_swapchain: true,
         ..DeviceExtensions::empty()
     };
+    
     let (physical_device, queue_family_index) = instance
-        .enumerate_physical_devices()
-        .unwrap()
+        .enumerate_physical_devices()?
         .filter(|p| p.supported_extensions().contains(&device_extensions))
         .filter_map(|p| {
             p.queue_family_properties()
@@ -134,20 +152,18 @@ fn main() {
             }],
             ..Default::default()
         },
-    )
-        .unwrap();
+    )?;
 
     let queue = queues.next().unwrap();
 
     let (mut swapchain, images) = {
         let surface_capabilities = device
             .physical_device()
-            .surface_capabilities(&surface, Default::default())
-            .unwrap();
+            .surface_capabilities(&surface, Default::default())?;
+
         let image_format = device
             .physical_device()
-            .surface_formats(&surface, Default::default())
-            .unwrap()[0]
+            .surface_formats(&surface, Default::default())?[0]
             .0;
 
         Swapchain::new(
@@ -165,54 +181,24 @@ fn main() {
                     .unwrap(),
                 ..Default::default()
             },
-        )
-            .unwrap()
+        )?
     };
 
     let memory_allocator = Arc::new(StandardMemoryAllocator::new_default(device.clone()));
 
-    let vertex_buffer = Buffer::from_iter(
+    let vertex_buffer = create_buffer(
         memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
+        BufferUsage::VERTEX_BUFFER,
         POSITIONS,
-    )
-        .unwrap();
-    let normals_buffer = Buffer::from_iter(
+    );
+
+    let normals_buffer = create_buffer(
         memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::VERTEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
+        BufferUsage::VERTEX_BUFFER,
         NORMALS,
-    )
-        .unwrap();
-    let index_buffer = Buffer::from_iter(
-        memory_allocator.clone(),
-        BufferCreateInfo {
-            usage: BufferUsage::INDEX_BUFFER,
-            ..Default::default()
-        },
-        AllocationCreateInfo {
-            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
-                | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-            ..Default::default()
-        },
-        INDICES,
-    )
-        .unwrap();
+    );
+
+    let index_buffer = create_buffer(memory_allocator.clone(), BufferUsage::INDEX_BUFFER, INDICES);
 
     let uniform_buffer = SubbufferAllocator::new(
         memory_allocator.clone(),
@@ -244,15 +230,12 @@ fn main() {
             color: [color],
             depth_stencil: {depth_stencil},
         },
-    )
-        .unwrap();
+    )?;
 
-    let vs = shaders::vs::load(device.clone())
-        .unwrap()
+    let vs = shaders::vs::load(device.clone())?
         .entry_point("main")
         .unwrap();
-    let fs = shaders::fs::load(device.clone())
-        .unwrap()
+    let fs = shaders::fs::load(device.clone())?
         .entry_point("main")
         .unwrap();
 
@@ -262,7 +245,7 @@ fn main() {
         fs.clone(),
         &images,
         render_pass.clone(),
-    );
+    )?;
     let mut recreate_swapchain = false;
 
     let mut previous_frame_end = Some(sync::now(device.clone()).boxed());
@@ -311,7 +294,7 @@ fn main() {
                         fs.clone(),
                         &new_images,
                         render_pass.clone(),
-                    );
+                    ).unwrap();
                     pipeline = new_pipeline;
                     framebuffers = new_framebuffers;
                     recreate_swapchain = false;
@@ -359,7 +342,7 @@ fn main() {
                     [WriteDescriptorSet::buffer(0, uniform_buffer_subbuffer)],
                     [],
                 )
-                    .unwrap();
+                .unwrap();
 
                 let (image_index, suboptimal, acquire_future) =
                     match acquire_next_image(swapchain.clone(), None).map_err(Validated::unwrap) {
@@ -380,7 +363,7 @@ fn main() {
                     queue.queue_family_index(),
                     CommandBufferUsage::OneTimeSubmit,
                 )
-                    .unwrap();
+                .unwrap();
                 builder
                     .begin_render_pass(
                         RenderPassBeginInfo {
@@ -452,7 +435,7 @@ fn window_size_dependent_setup(
     fs: EntryPoint,
     images: &[Arc<Image>],
     render_pass: Arc<RenderPass>,
-) -> (Arc<GraphicsPipeline>, Vec<Arc<Framebuffer>>) {
+) -> Result<(Arc<GraphicsPipeline>, Vec<Arc<Framebuffer>>), Validated<VulkanError>> {
     let device = memory_allocator.device().clone();
     let extent = images[0].extent();
 
@@ -468,9 +451,8 @@ fn window_size_dependent_setup(
             },
             AllocationCreateInfo::default(),
         )
-            .unwrap(),
-    )
-        .unwrap();
+        .unwrap(),
+    )?;
 
     let framebuffers = images
         .iter()
@@ -483,18 +465,18 @@ fn window_size_dependent_setup(
                     ..Default::default()
                 },
             )
-                .unwrap()
+            .unwrap()
         })
         .collect::<Vec<_>>();
 
-    // In the triangle example we use a dynamic viewport, as its a simple example. However in the
+    // In the triangle example we use a dynamic viewport, as it's a simple example. However in the
     // teapot example, we recreate the pipelines with a hardcoded viewport instead. This allows the
     // driver to optimize things, at the cost of slower window resizes.
     // https://computergraphics.stackexchange.com/questions/5742/vulkan-best-way-of-updating-pipeline-viewport
+    
     let pipeline = {
         let vertex_input_state = [Position::per_vertex(), Normal::per_vertex()]
-            .definition(&vs.info().input_interface)
-            .unwrap();
+            .definition(&vs.info().input_interface)?;
         let stages = [
             PipelineShaderStageCreateInfo::new(vs),
             PipelineShaderStageCreateInfo::new(fs),
@@ -504,8 +486,8 @@ fn window_size_dependent_setup(
             PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages)
                 .into_pipeline_layout_create_info(device.clone())
                 .unwrap(),
-        )
-            .unwrap();
+        )?;
+        
         let subpass = Subpass::from(render_pass, 0).unwrap();
 
         GraphicsPipeline::new(
@@ -521,8 +503,8 @@ fn window_size_dependent_setup(
                         extent: [extent[0] as f32, extent[1] as f32],
                         depth_range: 0.0..=1.0,
                     }]
-                        .into_iter()
-                        .collect(),
+                    .into_iter()
+                    .collect(),
                     ..Default::default()
                 }),
                 rasterization_state: Some(RasterizationState::default()),
@@ -538,10 +520,8 @@ fn window_size_dependent_setup(
                 subpass: Some(subpass.into()),
                 ..GraphicsPipelineCreateInfo::layout(layout)
             },
-        )
-            .unwrap()
+        )?
     };
 
-    (pipeline, framebuffers)
+    Ok((pipeline, framebuffers))
 }
-
